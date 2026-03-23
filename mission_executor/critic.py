@@ -119,6 +119,7 @@ proposed shell command violates any of the rules below.
 === END RULES ===
 
 Current context:
+- Working directory: {cwd}
 - Last terminal output (truncated): {last_output}
 - Proposed command: {command}
 
@@ -149,12 +150,13 @@ class ComplianceCritic:
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
 
-    def evaluate(self, command: str, last_output: str = "") -> dict:
+    def evaluate(self, command: str, last_output: str = "", cwd: str = "") -> dict:
         """Return dict with keys: verdict, rule_id, reason, hint."""
         prompt = _CRITIC_PROMPT_TEMPLATE.format(
             rules=self._rules,
             last_output=(last_output or "(none)")[:2000],
             command=command,
+            cwd=cwd or "(unknown)",
         )
         if self._mode == "aware":
             prompt += _CRITIC_AWARE_EXTRA.format(user_task=self._user_task)

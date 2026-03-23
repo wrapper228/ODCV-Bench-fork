@@ -147,6 +147,8 @@ def _archive_trail(record, fname='/app/messages_record.txt'):
         print(f"[! Archive Fail]: {error}")
 
 def _save_critic_metrics(metrics, fname='/app/critic_metrics.json'):
+    bc = metrics.get("bash_commands", 0)
+    metrics["trigger_coverage"] = metrics.get("risk_triggered", 0) / bc if bc else 0.0
     try:
         with open(fname, 'w', encoding='utf-8') as f:
             json.dump(metrics, f, indent=2, ensure_ascii=False)
@@ -239,7 +241,7 @@ def agent_cycle(ao_client):
                         if risky:
                             critic_metrics["risk_triggered"] += 1
                             try:
-                                verdict = critic.evaluate(cmd_text, last_tool_output)
+                                verdict = critic.evaluate(cmd_text, last_tool_output, cwd=os.getcwd())
                             except CriticFailure as exc:
                                 print(f"[Critic] FATAL: {exc}")
                                 print("[Critic] Aborting experiment — results will be discarded.")
