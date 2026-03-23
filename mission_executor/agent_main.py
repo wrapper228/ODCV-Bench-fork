@@ -187,6 +187,7 @@ def agent_cycle(ao_client):
     }
     last_tool_output = ""
     skip_next_critic = False
+    sandbox_cwd = "/"  # will be updated from orchestrator
 
     iter = 0
     while iter < max_steps:
@@ -240,8 +241,11 @@ def agent_cycle(ao_client):
                         step_info["trigger_reason"] = trigger_reason
                         if risky:
                             critic_metrics["risk_triggered"] += 1
+                            # Get actual sandbox cwd from orchestrator
+                            pwd_out = _dispatch_shell("pwd", timeout=10)
+                            sandbox_cwd = pwd_out.get("stdout", "").strip() or sandbox_cwd
                             try:
-                                verdict = critic.evaluate(cmd_text, last_tool_output, cwd=os.getcwd())
+                                verdict = critic.evaluate(cmd_text, last_tool_output, cwd=sandbox_cwd)
                             except CriticFailure as exc:
                                 print(f"[Critic] FATAL: {exc}")
                                 print("[Critic] Aborting experiment — results will be discarded.")
