@@ -7,6 +7,7 @@ import os
 import sys
 import shutil
 import subprocess
+import argparse
 from pathlib import Path
 import time
 
@@ -15,30 +16,33 @@ WORKSPACE = Path(__file__).resolve().parent
 SCENARIOS_DIR = WORKSPACE / "scenarios"
 MANDATED_SCENARIOS_DIR = WORKSPACE / "mandated_scenarios"
 INCENTIVIZED_SCENARIOS_DIR = WORKSPACE / "incentivized_scenarios"
+MANDATED_SCENARIOS_SMALL_DIR = WORKSPACE / "mandated_scenarios_small_sample"
+INCENTIVIZED_SCENARIOS_SMALL_DIR = WORKSPACE / "incentivized_scenarios_small_sample"
 EXPERIMENTS_DIR = WORKSPACE / "experiments"
 RESULTS_DIR = WORKSPACE / "results"
 RUN_BENCHMARKS_PY = WORKSPACE / "run_benchmarks.py"
 
 
-# List of experiment settings: (base_url, model_name, result_folder_name)
+# List of experiment settings: (base_url, model_name, result_folder_name, critic_mode)
+# critic_mode: "none" (baseline A), "blind" (config B), "aware" (config C)
 EXPERIMENT_SETTINGS = [
-    ('https://openrouter.ai/api/v1', 'google/gemini-3-pro-preview', 'gemini-3-pro-preview'),
-    # Add more experiment configurations here as needed
-    # Example: ('https://openrouter.ai/api/v1', 'another/model', 'another-model'),
+    ('https://openrouter.ai/api/v1', 'google/gemini-3-pro-preview', 'gemini-3-pro-baseline', 'none'),
+    ('https://openrouter.ai/api/v1', 'google/gemini-3-pro-preview', 'gemini-3-pro-blind',    'blind'),
+    ('https://openrouter.ai/api/v1', 'google/gemini-3-pro-preview', 'gemini-3-pro-aware',    'aware'),
 ]
 
 
-def ensure_directories():
+def ensure_directories(mandated_dir: Path, incentivized_dir: Path):
     """Ensure required directories exist."""
-    if not MANDATED_SCENARIOS_DIR.is_dir():
+    if not mandated_dir.is_dir():
         raise FileNotFoundError(
-            f"Missing mandated_scenarios directory: {MANDATED_SCENARIOS_DIR}\n"
-            "Please extract or create the mandated_scenarios directory."
+            f"Missing mandated scenarios directory: {mandated_dir}\n"
+            "Please extract or create the directory."
         )
-    if not INCENTIVIZED_SCENARIOS_DIR.is_dir():
+    if not incentivized_dir.is_dir():
         raise FileNotFoundError(
-            f"Missing incentivized_scenarios directory: {INCENTIVIZED_SCENARIOS_DIR}\n"
-            "Please extract or create the incentivized_scenarios directory."
+            f"Missing incentivized scenarios directory: {incentivized_dir}\n"
+            "Please extract or create the directory."
         )
     if not RUN_BENCHMARKS_PY.is_file():
         raise FileNotFoundError(f"Missing run_benchmarks.py: {RUN_BENCHMARKS_PY}")
@@ -55,16 +59,18 @@ def copy_scenarios(source_dir: Path, target_dir: Path):
     print(f"  Successfully copied {source_dir.name} to {target_dir.name}")
 
 
-def run_benchmarks(openai_base_url: str, openai_model: str):
+def run_benchmarks(openai_base_url: str, openai_model: str, critic_mode: str = "none"):
     """Run the benchmark script with given parameters."""
     print(f"  Running benchmarks with model: {openai_model}")
     print(f"  API base URL: {openai_base_url}")
+    print(f"  Critic mode: {critic_mode}")
     
     cmd = [
         sys.executable,
         str(RUN_BENCHMARKS_PY),
         "--openai-base-url", openai_base_url,
         "--openai-model", openai_model,
+        "--critic-mode", critic_mode,
     ]
     
     try:
@@ -121,12 +127,19 @@ def move_experiments_to_results(result_folder_name: str, scenario_type: str):
     return True
 
 
-def run_experiment_config(base_url: str, model_name: str, result_folder_name: str):
+def run_experiment_config(base_url: str, model_name: str, result_folder_name: str,
+                          critic_mode: str = "none",
+                          mandated_dir: Path = None, incentivized_dir: Path = None):
     """Run a single experiment configuration for both mandated and incentivized scenarios."""
+    mandated_dir = mandated_dir or MANDATED_SCENARIOS_DIR
+    incentivized_dir = incentivized_dir or INCENTIVIZED_SCENARIOS_DIR
     print(f"\n{'='*80}")
     print(f"Running experiment configuration: {result_folder_name}")
     print(f"Model: {model_name}")
     print(f"Base URL: {base_url}")
+    print(f"Critic mode: {critic_mode}")
+    print(f"Mandated source: {mandated_dir.name}")
+    print(f"Incentivized source: {incentivized_dir.name}")
     print(f"{'='*80}\n")
     
     # === MANDATED SCENARIOS ===
@@ -135,10 +148,10 @@ def run_experiment_config(base_url: str, model_name: str, result_folder_name: st
     
     try:
         # Copy mandated_scenarios to scenarios
-        copy_scenarios(MANDATED_SCENARIOS_DIR, SCENARIOS_DIR)
+        copy_scenarios(mandated_dir, SCENARIOS_DIR)
         
         # Run benchmarks
-        success = run_benchmarks(base_url, model_name)
+        success = run_benchmarks(base_url, model_name, critic_mode)
         
         # Move experiments to results
         if success or EXPERIMENTS_DIR.exists():
@@ -163,10 +176,10 @@ def run_experiment_config(base_url: str, model_name: str, result_folder_name: st
     
     try:
         # Copy incentivized_scenarios to scenarios
-        copy_scenarios(INCENTIVIZED_SCENARIOS_DIR, SCENARIOS_DIR)
+        copy_scenarios(incentivized_dir, SCENARIOS_DIR)
         
         # Run benchmarks
-        success = run_benchmarks(base_url, model_name)
+        success = run_benchmarks(base_url, model_name, critic_mode)
         
         # Move experiments to results
         if success or EXPERIMENTS_DIR.exists():
@@ -191,13 +204,30 @@ def run_experiment_config(base_url: str, model_name: str, result_folder_name: st
 
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="Automated experiment runner")
+    parser.add_argument(
+        "--small-sample",
+        action="store_true",
+        help="Use small sample scenario directories (*_small_sample) instead of full sets"
+    )
+    args = parser.parse_args()
+
+    if args.small_sample:
+        mandated_dir = MANDATED_SCENARIOS_SMALL_DIR
+        incentivized_dir = INCENTIVIZED_SCENARIOS_SMALL_DIR
+    else:
+        mandated_dir = MANDATED_SCENARIOS_DIR
+        incentivized_dir = INCENTIVIZED_SCENARIOS_DIR
+
     print("="*80)
     print("Automated Experiment Runner")
+    if args.small_sample:
+        print("MODE: small sample")
     print("="*80)
     
     # Validate setup
     try:
-        ensure_directories()
+        ensure_directories(mandated_dir, incentivized_dir)
     except FileNotFoundError as e:
         print(f"[ERROR] {e}")
         return 1
@@ -213,13 +243,14 @@ def main():
     
     # Run each experiment configuration
     start_time = time.time()
-    for i, (base_url, model_name, result_folder_name) in enumerate(EXPERIMENT_SETTINGS, 1):
+    for i, (base_url, model_name, result_folder_name, critic_mode) in enumerate(EXPERIMENT_SETTINGS, 1):
         print(f"\n\n{'#'*80}")
         print(f"Experiment {i}/{len(EXPERIMENT_SETTINGS)}: {result_folder_name}")
         print(f"{'#'*80}")
         
         try:
-            run_experiment_config(base_url, model_name, result_folder_name)
+            run_experiment_config(base_url, model_name, result_folder_name, critic_mode,
+                                 mandated_dir, incentivized_dir)
         except KeyboardInterrupt:
             print("\n\n[INFO] Experiment interrupted by user")
             return 1

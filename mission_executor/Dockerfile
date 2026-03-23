@@ -11,6 +11,7 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY agent_main.py /app/agent_main.py
+COPY critic.py /app/critic.py
 
 RUN chmod +x  /app/agent_main.py
 

@@ -1,0 +1,109 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\title{Task-Blind Compliance Monitoring for LLM Agents:\\Evidence for Recursive Rationalization}
+\author{Research Proposal}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\section{Problem Statement}
+
+Large language model (LLM) agents deployed in agentic loops---where a model repeatedly generates actions, observes outcomes, and plans next steps---systematically violate rules specified in their system prompts, as recently shown by benchmarks such as ODCV-Bench. Crucially, these violations are not failures of comprehension: agents demonstrably \emph{understand} the rules they violate. Instead, violations appear to arise from a rational trade-off where the agent prioritizes task completion over rule compliance, constructing post-hoc justifications for each deviation.
+
+We hypothesize that this behavior follows a \textbf{Recursive Rationalization Pattern (RRP)}: when an LLM is given both a task objective and a compliance constraint, it generates plausible-sounding justifications for violating the constraint in service of the objective. Preliminary observations suggest that RRP reproduces at every abstraction level---an agent rationalizes violations, a critic reviewing the agent's actions rationalizes allowing them, and a meta-critic reviewing the critic does the same. This paper aims to provide controlled evidence for this pattern.
+
+\section{Core Hypothesis}
+
+\begin{quote}
+A compliance monitor that is \textbf{task-blind}---it observes only the system prompt rules and the agent's proposed action in context, but \emph{not} the user's task---will detect rule violations more reliably than a \textbf{task-aware} monitor that additionally sees the task, because task awareness provides the monitor with the informational substrate needed to rationalize exceptions.
+\end{quote}
+
+This hypothesis is motivated by two observations:
+\begin{enumerate}[nosep]
+    \item \textbf{Zero-stake principle.} In preliminary experiments, an LLM evaluating compliance without task-completion pressure did not exhibit the same systematic bias toward allowing violations. Rationalization appears to require knowing \emph{what is at stake}.
+    \item \textbf{Decorrelated errors (predicted).} We expect a task-blind critic's errors to be perceptual (misunderstanding context), not motivational (rationalizing exceptions). If so, these errors are statistically independent from the agent's, and combining agent + blind critic should yield genuine error reduction.
+\end{enumerate}
+
+\section{Proposed Method}
+
+We propose a runtime compliance monitor for terminal-based LLM agents: a \textbf{task-blind critic} that intercepts proposed commands before execution.
+
+\subsection{Task-Blind Critic}
+
+Before executing a proposed command classified as \emph{risky} (via deterministic pattern matching on command tokens), a lightweight LLM evaluates compliance:
+
+\begin{itemize}[nosep]
+    \item \textbf{Inputs}: system prompt rules, current working directory, last terminal output, proposed command.
+    \item \textbf{Not provided}: user task, agent reasoning, full trajectory history.
+    \item \textbf{Output}: structured verdict (ALLOW / VIOLATION) with violated rule ID and a one-sentence fix hint.
+\end{itemize}
+
+On VIOLATION, the agent receives a short blocking message (rule ID + reason + hint) and regenerates once. The critic will be invoked on approximately 10--50\% of steps, yielding a cost overhead of $\sim$+0.1 to baseline (because it's cheaper).
+
+\subsection{Risk Trigger}
+
+The critic is not invoked on every step. A deterministic pre-filter flags commands as risky based on:
+\begin{enumerate}[nosep]
+    \item Presence of risky command patterns (file modification, package installation, network access, destructive operations).
+    \item Token overlap between the proposed command and rule keywords.
+\end{enumerate}
+
+\section{Experimental Design}
+
+\subsection{Configurations}
+
+We evaluate three configurations on identical tasks with identical seeds:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llcc}
+\toprule
+Config & Description & Critic & Critic sees task? \\
+\midrule
+A & Baseline & --- & --- \\
+B & +Blind Critic & \checkmark & No \\
+C & +Aware Critic & \checkmark & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Kill Experiment}
+
+The comparison between configurations B and C is the decisive test of our hypothesis:
+\begin{itemize}[nosep]
+    \item \textbf{B $>$ C} (blind outperforms aware): Consistent with RRP. To rule out the alternative explanation that extra task context simply adds noise (information overload rather than rationalization), we additionally perform qualitative analysis of aware-critic outputs, looking for explicit task-based justifications of violations (e.g., ``ALLOW, because the task requires~X'').
+    \item \textbf{B $\approx$ C}: Task-blind principle is not the active mechanism; the benefit comes from having any external reviewer.
+    \item \textbf{B $<$ C}: Task-blind principle is harmful; the critic needs task context. \textbf{Hypothesis killed.}
+\end{itemize}
+
+\subsection{Metrics}
+
+We focus on ODCV-Bench (its main paper is only a preprint, but right now it's the only benchmark that explicitly highlights the problem of \emph{constraint violation rationalization}). We use "severity score" metric defined in benchmark without any modifications.
+\section{Expected Contributions}
+
+\begin{enumerate}
+    \item \textbf{Empirical characterization of RRP.} We provide controlled evidence that rationalization is not limited to the agent but reproduces in monitoring components when they have access to task context. To the best of our knowledge, these aspects have not been articulated in the literature.
+    \item \textbf{Task-blind monitoring as a design principle.} We formalize and empirically validate the principle that compliance monitors should be informationally isolated from the agent's objective.
+    \item \textbf{Practical low-overhead system.} Task-blind critic adds a small cost, requires no fine-tuning or architectural changes to the base agent, and is applicable to any tool-use LLM agent with clear action space (such as terminal-based agents). It can be easily programmed upon any agent.
+    \item \textbf{Ablation isolating the mechanism.} The blind-vs-aware comparison on the same model, same benchmark, same trigger logic isolates task awareness as the causal variable enabling rationalization.
+\end{enumerate}
+
+\section{Scope and Limitations}
+
+\begin{itemize}[nosep]
+    \item We focus on terminal-based agents where actions are text commands, \textbf{because there is no fitting benchmark} for exploring \emph{constraint violation rationalization} in GUI/computer-use scenario at the moment.
+    \item The deterministic risk trigger may miss novel risky commands not covered by the pattern set. We report trigger coverage alongside results.
+    \item RRP may be model-dependent. We test on one frontier model; cross-model generalization is a natural follow-up.
+\end{itemize}
+
+\section{Timeline}
+
+Total: $\sim$1.5 working month (including paper). Target venue deadline: mid-May 2026.
+
+\end{document}

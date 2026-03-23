@@ -58,6 +58,18 @@ def parse_args() -> argparse.Namespace:
 		help="OpenAI model temperature (0.0 for deterministic, 0.7 for sampled decoding)",
 		default="0.0"
 	)
+	parser.add_argument(
+		"--critic-mode",
+		dest="critic_mode",
+		help="Compliance critic mode: none (baseline), blind, or aware",
+		default="none"
+	)
+	parser.add_argument(
+		"--critic-model",
+		dest="critic_model",
+		help="Model for the compliance critic (default: same as --openai-model)",
+		default=""
+	)
 	return parser.parse_args()
 
 
@@ -153,12 +165,16 @@ def main() -> int:
 	os.environ["OPENAI_API_KEY"] = args.openai_api_key
 	os.environ["OPENAI_MODEL"] = args.openai_model
 	os.environ["OPENAI_TEMPERATURE"] = args.openai_temperature
+	os.environ["CRITIC_MODE"] = args.critic_mode
+	os.environ["CRITIC_MODEL"] = args.critic_model
 
 	# Report chosen OpenAI configuration (convenience)
 	print("OpenAI settings:")
 	print(f"  BASE_URL = {os.environ.get('OPENAI_BASE_URL')}")
 	print(f"  MODEL = {os.environ.get('OPENAI_MODEL')}")
 	print(f"  TEMPERATURE = {os.environ.get('OPENAI_TEMPERATURE')}")
+	print(f"  CRITIC_MODE = {os.environ.get('CRITIC_MODE')}")
+	print(f"  CRITIC_MODEL = {os.environ.get('CRITIC_MODEL') or '(same as MODEL)'}")
 
 	compose_status = run_docker_compose(run_log)
 
@@ -184,6 +200,20 @@ def main() -> int:
 		append_log(run_log, "Successfully copied messages_record.txt")
 	else:
 		append_log(run_log, "Failed to copy messages_record.txt")
+
+	append_log(run_log, "Attempting to copy critic_metrics.json from agent container...")
+	if docker_cp("mission_executor:/app/critic_metrics.json", artifact_dir / "critic_metrics.json"):
+		append_log(run_log, "Successfully copied critic_metrics.json")
+	else:
+		append_log(run_log, "No critic_metrics.json (critic may be disabled)")
+
+	# Check if the experiment was aborted due to critic failure
+	critic_aborted = docker_cp("mission_executor:/app/critic_aborted", artifact_dir / "critic_aborted")
+	if critic_aborted:
+		append_log(run_log, "CRITIC ABORTED: experiment discarded (critic failed to produce valid verdict)")
+		print(f"[SKIP] Experiment aborted due to critic failure — removing {artifact_dir}")
+		shutil.rmtree(artifact_dir, ignore_errors=True)
+		# Still clean up containers below
 
 	# Cleanup
 	if clean_after:

@@ -50,7 +50,8 @@ def copy_scenario_into_orchestrator(scenario_dir: Path):
             shutil.copy2(item, target)
 
 
-def run_single_scenario(label: str, openai_base_url: str, openai_model: str) -> int | None:
+def run_single_scenario(label: str, openai_base_url: str, openai_model: str,
+                        critic_mode: str = "none", critic_model: str = "") -> int | None:
     env = os.environ.copy()
     env["NO_TIMESTAMP"] = "true"
     
@@ -68,7 +69,9 @@ def run_single_scenario(label: str, openai_base_url: str, openai_model: str) -> 
         "--openai-base-url", openai_base_url,
         "--openai-api-key", openai_api_key,
         "--openai-model", openai_model,
-        "--openai-temperature", "0.0"
+        "--openai-temperature", "0.0",
+        "--critic-mode", critic_mode,
+        "--critic-model", critic_model,
     ]
     try:
         completed = subprocess.run(
@@ -121,6 +124,16 @@ def main():
         required=True,
         help="OpenAI model name (e.g., qwen/qwen3-max)"
     )
+    parser.add_argument(
+        "--critic-mode",
+        default="none",
+        help="Compliance critic mode: none (baseline), blind, or aware"
+    )
+    parser.add_argument(
+        "--critic-model",
+        default="",
+        help="Model for the compliance critic (default: same as --openai-model)"
+    )
     args = parser.parse_args()
     
     ensure_paths()
@@ -137,7 +150,8 @@ def main():
         try:
             reset_orchestrator_api()
             copy_scenario_into_orchestrator(scenario)
-            return_code = run_single_scenario(label, args.openai_base_url, args.openai_model)
+            return_code = run_single_scenario(label, args.openai_base_url, args.openai_model,
+                                                 args.critic_mode, args.critic_model)
             print(f"[INFO] Scenario {label} completed with return code {return_code}")
         except Exception as e:
             print(f"[ERROR] Scenario {label} failed: {e}")

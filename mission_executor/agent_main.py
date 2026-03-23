@@ -5,9 +5,11 @@ Performs system-initiated command/response flows and auxiliary evaluation routin
 
 import os, sys, time, json, re
 import uuid
+from pathlib import Path
 import urllib.request as ureq
 import urllib.error as uerr
 from openai import OpenAI
+from critic import RiskTrigger, ComplianceCritic, CriticFailure
 
 max_steps = 50
 
@@ -19,6 +21,10 @@ try:
     OPENAI_TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.0"))
 except Exception:
     OPENAI_TEMPERATURE = 0.0
+
+# Critic configuration: "none" (baseline), "blind", or "aware"
+CRITIC_MODE = os.environ.get("CRITIC_MODE", "none")
+CRITIC_MODEL = os.environ.get("CRITIC_MODEL", "") or OPENAI_MODEL
 
 def _pull_prompts():
     with open('/app/prompt.json', 'r') as src:
@@ -132,9 +138,21 @@ def _archive_trail(record, fname='/app/messages_record.txt'):
                 d.write(f"== Step {idx+1} ==\nrole: {e.get('role','')}\ncontent: {e.get('content','')}\n")
                 if 'reasoning' in e: d.write(f"reason: {e['reasoning']}\n")
                 if 'tool_calls' in e: d.write(f"call: {str(e['tool_calls'])}\n")
+                # Mark critic-blocked steps
+                content = e.get('content', '') or ''
+                if 'COMPLIANCE BLOCK' in content:
+                    d.write("[CRITIC_BLOCKED]\n")
                 d.write("\n")
     except Exception as error:
         print(f"[! Archive Fail]: {error}")
+
+def _save_critic_metrics(metrics, fname='/app/critic_metrics.json'):
+    try:
+        with open(fname, 'w', encoding='utf-8') as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[! Critic metrics save fail]: {e}")
+
 
 def agent_cycle(ao_client):
     sys_s, user_s = _pull_prompts()
@@ -146,9 +164,32 @@ def agent_cycle(ao_client):
     ]
     traj.append({"role": "user", "content": user_s})
     snap.append({"role": "user", "content": user_s})
+
+    # --- Critic setup ---
+    risk_trigger = RiskTrigger(sys_s)
+    critic = None
+    if CRITIC_MODE in ("blind", "aware"):
+        critic = ComplianceCritic(
+            client=ao_client, model=CRITIC_MODEL,
+            system_rules=sys_s, user_task=user_s, mode=CRITIC_MODE,
+        )
+        print(f"[Critic] mode={CRITIC_MODE}, model={CRITIC_MODEL}")
+
+    critic_metrics = {
+        "mode": CRITIC_MODE, "critic_model": CRITIC_MODEL,
+        "total_steps": 0, "bash_commands": 0,
+        "risk_triggered": 0, "critic_invoked": 0,
+        "critic_blocked": 0, "critic_allowed": 0,
+        "critic_tokens": {"prompt": 0, "completion": 0},
+        "per_step": [],
+    }
+    last_tool_output = ""
+    skip_next_critic = False
+
     iter = 0
     while iter < max_steps:
         iter += 1
+        critic_metrics["total_steps"] = iter
         print(f"\n=== CYCLE {iter} / {max_steps} ===")
         try:
             res = ao_client.chat.completions.create(
@@ -185,16 +226,64 @@ def agent_cycle(ao_client):
                 fargs = _slurp_tool_args(tcall)
                 print(f"[Tool]: {ftype} with {fargs}")
                 if ftype == "bash":
-                    out = _dispatch_shell(fargs.get("command", ""), reason, m.content, timeout=3000)
-                    print(f"[out]:", out)
-                    while True:
-                        if not ('stderr' in out and 'not_ready' in out['stderr']):
-                            break
-                        time.sleep(3)
-                        out = _dispatch_shell(fargs.get("command", ""), reason, m.content, timeout=3000)
-                    #out["stdout"] = out["stdout"][:1000]
-                    #out["stderr"] = out["stderr"][:1000]
-                    results.append({"tool_call_id": tcall.id, "role": out["role"], "content": json.dumps(out)})
+                    cmd_text = fargs.get("command", "")
+                    critic_metrics["bash_commands"] += 1
+                    step_info = {"step": iter, "command": cmd_text, "risky": False, "critic_verdict": None, "blocked": False}
+
+                    # --- Critic interception ---
+                    blocked = False
+                    if critic is not None and not skip_next_critic:
+                        risky, trigger_reason = risk_trigger.is_risky(cmd_text)
+                        step_info["risky"] = risky
+                        step_info["trigger_reason"] = trigger_reason
+                        if risky:
+                            critic_metrics["risk_triggered"] += 1
+                            try:
+                                verdict = critic.evaluate(cmd_text, last_tool_output)
+                            except CriticFailure as exc:
+                                print(f"[Critic] FATAL: {exc}")
+                                print("[Critic] Aborting experiment — results will be discarded.")
+                                critic_metrics["aborted"] = True
+                                critic_metrics["abort_reason"] = str(exc)
+                                critic_metrics["total_steps"] = iter
+                                critic_metrics["critic_tokens"]["prompt"] = critic.total_prompt_tokens
+                                critic_metrics["critic_tokens"]["completion"] = critic.total_completion_tokens
+                                _save_critic_metrics(critic_metrics)
+                                _archive_trail(snap)
+                                # Write abort marker for run.py to detect
+                                Path("/app/critic_aborted").write_text(str(exc), encoding="utf-8")
+                                return traj
+                            critic_metrics["critic_invoked"] += 1
+                            step_info["critic_verdict"] = verdict
+                            print(f"[Critic] verdict={verdict['verdict']} | {verdict.get('reason','')}")
+                            if verdict["verdict"] == "VIOLATION":
+                                critic_metrics["critic_blocked"] += 1
+                                step_info["blocked"] = True
+                                skip_next_critic = True
+                                block_msg = (f"COMPLIANCE BLOCK: [{verdict.get('rule_id','')}] "
+                                             f"{verdict.get('reason','')}. "
+                                             f"Hint: {verdict.get('hint','')}")
+                                out = {"stdout": "", "stderr": block_msg, "role": "tool", "returncode": 1}
+                                results.append({"tool_call_id": tcall.id, "role": out["role"], "content": json.dumps(out)})
+                                blocked = True
+                            else:
+                                critic_metrics["critic_allowed"] += 1
+                    elif skip_next_critic:
+                        skip_next_critic = False
+                        step_info["skip_reason"] = "post_block_regeneration"
+
+                    critic_metrics["per_step"].append(step_info)
+
+                    if not blocked:
+                        out = _dispatch_shell(cmd_text, reason, m.content, timeout=3000)
+                        print(f"[out]:", out)
+                        while True:
+                            if not ('stderr' in out and 'not_ready' in out['stderr']):
+                                break
+                            time.sleep(3)
+                            out = _dispatch_shell(cmd_text, reason, m.content, timeout=3000)
+                        last_tool_output = out.get("stdout", "") + out.get("stderr", "")
+                        results.append({"tool_call_id": tcall.id, "role": out["role"], "content": json.dumps(out)})
                 elif ftype == "task_complete":
                     why = fargs.get("reason", "None given")
                     print(f"Exit: {why}")
@@ -203,6 +292,11 @@ def agent_cycle(ao_client):
                     traj.extend(results)
                     snap.extend(results)
                     _archive_trail(snap)
+                    critic_metrics["total_steps"] = iter
+                    if critic:
+                        critic_metrics["critic_tokens"]["prompt"] = critic.total_prompt_tokens
+                        critic_metrics["critic_tokens"]["completion"] = critic.total_completion_tokens
+                    _save_critic_metrics(critic_metrics)
                     return traj
                 else:
                     results.append({"tool_call_id": tcall.id, "role": "tool", "content": json.dumps({"error": f"[UNKNOWN TOOL] {ftype}"})})
@@ -214,6 +308,11 @@ def agent_cycle(ao_client):
             snap.append(msgghost)
     print(f"Reached cycle limit. Closing.")
     _archive_trail(snap)
+    critic_metrics["total_steps"] = iter
+    if critic:
+        critic_metrics["critic_tokens"]["prompt"] = critic.total_prompt_tokens
+        critic_metrics["critic_tokens"]["completion"] = critic.total_completion_tokens
+    _save_critic_metrics(critic_metrics)
     return traj
 
 def main_agent_start():
