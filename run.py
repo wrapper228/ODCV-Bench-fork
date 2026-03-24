@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -70,6 +71,12 @@ def parse_args() -> argparse.Namespace:
 		help="Model for the compliance critic (default: same as --openai-model)",
 		default=""
 	)
+	parser.add_argument(
+		"--backup-api-key",
+		dest="backup_api_key",
+		help="Backup OpenAI/OpenRouter API key (used after primary exhausts retries)",
+		default="",
+	)
 	return parser.parse_args()
 
 
@@ -113,9 +120,32 @@ def run_docker_compose(log_file: Path) -> int:
 	return proc.returncode
 
 
-def docker_cp(container_path: str, dest: Path) -> bool:
+def _extract_container_id(text: str) -> str:
+	"""Extract the last docker container id from mixed compose output."""
+	for raw_line in reversed((text or "").splitlines()):
+		line = raw_line.strip()
+		if re.fullmatch(r"[0-9a-f]{12,64}", line):
+			return line
+	return ""
+
+
+def get_compose_container_id(service_name: str) -> str:
 	result = subprocess.run(
-		["docker", "cp", container_path, str(dest)],
+		["docker", "compose", "ps", "-aq", service_name],
+		stdout=subprocess.PIPE,
+		stderr=subprocess.PIPE,
+		text=True,
+	)
+	if result.returncode != 0:
+		return ""
+	return _extract_container_id(result.stdout)
+
+
+def docker_cp_from_container(container_id: str, source_path: str, dest: Path) -> bool:
+	if not container_id:
+		return False
+	result = subprocess.run(
+		["docker", "cp", f"{container_id}:{source_path}", str(dest)],
 		stdout=subprocess.PIPE,
 		stderr=subprocess.STDOUT,
 		text=True,
@@ -163,10 +193,12 @@ def main() -> int:
 	# Set OpenAI environment variables from command line arguments
 	os.environ["OPENAI_BASE_URL"] = args.openai_base_url
 	os.environ["OPENAI_API_KEY"] = args.openai_api_key
+	os.environ["OPENROUTER_API_KEY"] = args.openai_api_key
 	os.environ["OPENAI_MODEL"] = args.openai_model
 	os.environ["OPENAI_TEMPERATURE"] = args.openai_temperature
 	os.environ["CRITIC_MODE"] = args.critic_mode
 	os.environ["CRITIC_MODEL"] = args.critic_model
+	os.environ["OPENAI_API_KEY_BACKUP"] = args.backup_api_key
 
 	# Report chosen OpenAI configuration (convenience)
 	print("OpenAI settings:")
@@ -186,29 +218,35 @@ def main() -> int:
 	else:
 		append_log(run_log, f"Docker-compose execution failed with exit code: {compose_status}")
 
-	# Copy artifacts from container `mission_executor` (as in run.bat)
+	executor_container_id = get_compose_container_id("executor")
+	if executor_container_id:
+		append_log(run_log, f"Executor container id: {executor_container_id}")
+	else:
+		append_log(run_log, "Could not resolve executor container id via docker compose ps -aq executor")
+
+	# Copy artifacts from compose-scoped executor container
 	append_log(run_log, "Attempting to copy result.json from agent container...")
 	result_json_path = artifact_dir / "result.json"
-	if docker_cp("mission_executor:/app/result.json", result_json_path):
+	if docker_cp_from_container(executor_container_id, "/app/result.json", result_json_path):
 		append_log(run_log, "Successfully copied result.json")
 	else:
 		append_log(run_log, "Failed to copy result.json, creating fallback result")
 		write_fallback_result(result_json_path)
 
 	append_log(run_log, "Attempting to copy messages_record.txt from agent container...")
-	if docker_cp("mission_executor:/app/messages_record.txt", artifact_dir / "messages_record.txt"):
+	if docker_cp_from_container(executor_container_id, "/app/messages_record.txt", artifact_dir / "messages_record.txt"):
 		append_log(run_log, "Successfully copied messages_record.txt")
 	else:
 		append_log(run_log, "Failed to copy messages_record.txt")
 
 	append_log(run_log, "Attempting to copy critic_metrics.json from agent container...")
-	if docker_cp("mission_executor:/app/critic_metrics.json", artifact_dir / "critic_metrics.json"):
+	if docker_cp_from_container(executor_container_id, "/app/critic_metrics.json", artifact_dir / "critic_metrics.json"):
 		append_log(run_log, "Successfully copied critic_metrics.json")
 	else:
 		append_log(run_log, "No critic_metrics.json (critic may be disabled)")
 
 	# Check if the experiment was aborted due to critic failure
-	critic_aborted = docker_cp("mission_executor:/app/critic_aborted", artifact_dir / "critic_aborted")
+	critic_aborted = docker_cp_from_container(executor_container_id, "/app/critic_aborted", artifact_dir / "critic_aborted")
 	if critic_aborted:
 		append_log(run_log, "CRITIC ABORTED: experiment discarded (critic failed to produce valid verdict)")
 		print(f"[SKIP] Experiment aborted due to critic failure — removing {artifact_dir}")

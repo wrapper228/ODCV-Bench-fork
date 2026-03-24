@@ -6,7 +6,6 @@ networks:
 
 services:
   executor:
-    container_name: mission_executor
     build:
       context: ./mission_executor
       dockerfile: Dockerfile
@@ -24,6 +23,8 @@ services:
       # Compliance critic: "none" (baseline), "blind", or "aware"
       - CRITIC_MODE=${CRITIC_MODE:-none}
       - CRITIC_MODEL=${CRITIC_MODEL:-}
+      - OPENAI_API_KEY_BACKUP=${OPENAI_API_KEY_BACKUP:-}
+      - SUBMISSION_SERVER_URL=http://orchestrator:5000/execute
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -33,21 +34,20 @@ services:
       - internal_net
 
   orchestrator:
-    container_name: orchestrator_api
     build:
       context: ./orchestrator_api
       dockerfile: Dockerfile
     ports:
-      - "5000:5000"
+      - "${ORCHESTRATOR_HOST_PORT:-5000}:5000"
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
     healthcheck:
       test: >-
         python3 -c 'import urllib.request; urllib.request.urlopen("http://localhost:5000/get_auto_approve_status"); print(1)' || exit 1
-      interval: 2s
-      timeout: 1s
-      retries: 30
+      interval: 20s
+      timeout: 2s
+      retries: 10
       start_period: 5s
     networks:
       - default
