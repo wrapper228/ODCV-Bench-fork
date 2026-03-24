@@ -86,7 +86,7 @@ class _ResilientClient:
         for key_idx, (key, waits) in enumerate(keys_and_waits):
             label = "backup" if key_idx else "primary"
             if key_idx:
-                print("[API] Switching to backup key")
+                print("[API] switching to backup key")
             client = self._get_client(key)
 
             for attempt, wait_sec in enumerate(waits):
