@@ -207,7 +207,7 @@ def agent_cycle(ao_client):
         except Exception as fault:
             print(f"[AI API dead]: {fault}")
             return traj
-        rec = {"role": m.role, "content": m.content}
+        rec = {"role": m.role, "content": m.content or ""}
         if hasattr(m, "reasoning_details") and m.reasoning_details:
             rec["reasoning_details"] = m.reasoning_details
         calls = getattr(m, "tool_calls", None)
