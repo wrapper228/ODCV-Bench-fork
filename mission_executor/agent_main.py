@@ -25,6 +25,88 @@ except Exception:
 # Critic configuration: "none" (baseline), "blind", or "aware"
 CRITIC_MODE = os.environ.get("CRITIC_MODE", "none")
 CRITIC_MODEL = os.environ.get("CRITIC_MODEL", "") or OPENAI_MODEL
+OPENAI_API_KEY_BACKUP = os.environ.get("OPENAI_API_KEY_BACKUP", "")
+
+
+def _write_result(status: str, reasoning: str, evaluation: int = 0, error_type: str = ""):
+    payload = {
+        "status": status,
+        "evaluation": evaluation,
+        "reasoning": reasoning,
+    }
+    if error_type:
+        payload["error_type"] = error_type
+    try:
+        with open("/app/result.json", "w", encoding="utf-8") as fp:
+            json.dump(payload, fp, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        print(f"[! Result write fail]: {exc}")
+
+class _ResilientClient:
+    """Drop-in for openai.OpenAI with retry + backup key switching.
+
+    Retry schedule:
+      Primary key:  immediate -> wait 60 s -> wait 120 s -> switch to backup
+      Backup key:   wait 60 s -> wait 120 s -> raise
+    """
+
+    _PRIMARY_WAITS = (0, 60, 120)
+    _BACKUP_WAITS  = (60, 120)
+
+    class _Completions:
+        def __init__(self, outer: "_ResilientClient") -> None:
+            self._outer = outer
+
+        def create(self, **kwargs):
+            return self._outer._create(**kwargs)
+
+    class _Chat:
+        def __init__(self, outer: "_ResilientClient") -> None:
+            self.completions = _ResilientClient._Completions(outer)
+
+    def __init__(self, base_url: str, primary_key: str, backup_key: str = "") -> None:
+        self._base_url = base_url
+        self._primary_key = primary_key
+        self._backup_key = backup_key
+        self._clients: dict = {}
+        self.chat = _ResilientClient._Chat(self)
+
+    def _get_client(self, key: str):
+        if key not in self._clients:
+            self._clients[key] = OpenAI(base_url=self._base_url, api_key=key)
+        return self._clients[key]
+
+    def _create(self, **kwargs):
+        keys_and_waits = [(self._primary_key, self._PRIMARY_WAITS)]
+        if self._backup_key:
+            keys_and_waits.append((self._backup_key, self._BACKUP_WAITS))
+
+        last_exc: Exception | None = None
+
+        for key_idx, (key, waits) in enumerate(keys_and_waits):
+            label = "backup" if key_idx else "primary"
+            if key_idx:
+                print("[API] Switching to backup key")
+            client = self._get_client(key)
+
+            for attempt, wait_sec in enumerate(waits):
+                if wait_sec > 0:
+                    print(f"[API] {label} key attempt {attempt + 1}/{len(waits)}: waiting {wait_sec}s...")
+                    time.sleep(wait_sec)
+                try:
+                    resp = client.chat.completions.create(**kwargs)
+                    if resp.choices:
+                        return resp
+                    last_exc = Exception(
+                        f"API returned choices=None ({label} key, attempt {attempt + 1})"
+                    )
+                    print(f"[API] choices=None from {label} key (attempt {attempt + 1})")
+                except Exception as exc:
+                    last_exc = exc
+                    print(f"[API] error from {label} key (attempt {attempt + 1}): {exc}")
+
+        raise last_exc or Exception("API: all retry attempts exhausted")
+
 
 def _pull_prompts():
     with open('/app/prompt.json', 'r') as src:
@@ -206,6 +288,12 @@ def agent_cycle(ao_client):
             m = res.choices[0].message
         except Exception as fault:
             print(f"[AI API dead]: {fault}")
+            _write_result(
+                status="AGENT_FAILED",
+                reasoning=f"Model API error: {fault}",
+                evaluation=0,
+                error_type="api_failure",
+            )
             return traj
         rec = {"role": m.role, "content": m.content or ""}
         if hasattr(m, "reasoning_details") and m.reasoning_details:
@@ -256,6 +344,12 @@ def agent_cycle(ao_client):
                                 critic_metrics["critic_tokens"]["completion"] = critic.total_completion_tokens
                                 _save_critic_metrics(critic_metrics)
                                 _archive_trail(snap)
+                                _write_result(
+                                    status="CRITIC_ABORTED",
+                                    reasoning=f"Critic failed to produce a valid verdict: {exc}",
+                                    evaluation=0,
+                                    error_type="critic_failure",
+                                )
                                 # Write abort marker for run.py to detect
                                 Path("/app/critic_aborted").write_text(str(exc), encoding="utf-8")
                                 return traj
@@ -303,6 +397,12 @@ def agent_cycle(ao_client):
                         critic_metrics["critic_tokens"]["prompt"] = critic.total_prompt_tokens
                         critic_metrics["critic_tokens"]["completion"] = critic.total_completion_tokens
                     _save_critic_metrics(critic_metrics)
+                    _write_result(
+                        status="TASK_COMPLETED",
+                        reasoning=why,
+                        evaluation=1,
+                        error_type="",
+                    )
                     return traj
                 else:
                     results.append({"tool_call_id": tcall.id, "role": "tool", "content": json.dumps({"error": f"[UNKNOWN TOOL] {ftype}"})})
@@ -319,11 +419,20 @@ def agent_cycle(ao_client):
         critic_metrics["critic_tokens"]["prompt"] = critic.total_prompt_tokens
         critic_metrics["critic_tokens"]["completion"] = critic.total_completion_tokens
     _save_critic_metrics(critic_metrics)
+    _write_result(
+        status="MAX_STEPS_REACHED",
+        reasoning=f"Agent reached the step limit ({max_steps}) before task_complete.",
+        evaluation=0,
+        error_type="max_steps",
+    )
     return traj
 
 def main_agent_start():
-    # Create OpenAI client using environment-configured base URL and API key
-    ai = OpenAI(base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY)
+    ai = _ResilientClient(
+        base_url=OPENAI_BASE_URL,
+        primary_key=OPENAI_API_KEY,
+        backup_key=OPENAI_API_KEY_BACKUP,
+    )
     print('[Startup] Validation .json/.md . . .')
     print('PROMPT.json/DESCRIPTION.md: OK')
     print('[BEGIN AGENT LOOP]')
@@ -331,8 +440,20 @@ def main_agent_start():
         record = agent_cycle(ai)
     except Exception as eb:
         print(f"[AGENT BOOM]: {eb}")
-        validation_log({"status": "AGENT_FAILED", "evaluation": 0, "reasoning": f"Agent failed: {str(eb)}"})
+        _write_result(
+            status="AGENT_FAILED",
+            reasoning=f"Agent failed: {str(eb)}",
+            evaluation=0,
+            error_type="agent_exception",
+        )
         return
+    if not Path("/app/result.json").exists():
+        _write_result(
+            status="RUN_FINISHED_WITHOUT_RESULT",
+            reasoning="Agent loop exited without explicit status.",
+            evaluation=0,
+            error_type="missing_result",
+        )
 
 if __name__ == "__main__":
     main_agent_start()
