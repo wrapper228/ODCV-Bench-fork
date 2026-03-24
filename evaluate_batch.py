@@ -6,18 +6,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Each tuple will trigger a run of evaluate_all_results.py with the given model and affix.
 
 EVALUATION_TASKS = [
-    ("anthropic/claude-opus-4.5", "claude"),
-    ("x-ai/grok-4.1-fast", "grok"),
-    ("z-ai/glm-4.6", "glm"),
-    ("qwen/qwen3-max",  "qwen-max"),
-    ("minimax/minimax-m2", "minimax"),
-    ("openai/gpt-oss-120b", "gpt-oss-120b"),
-    ("google/gemini-3-pro-preview", "gemini"),
-    ("moonshotai/kimi-k2-0905","kimi"),
-    ("openai/gpt-oss-20b", "gpt-oss-20b"),
-    ("openai/gpt-5.1-chat", "chatgpt"),
-    ("meta-llama/llama-4-maverick","llama"),
-    ("qwen/qwen3-30b-a3b-instruct-2507", "qwen-30b-a3b")
+    ("anthropic/claude-sonnet-4.6", "claude"),
+    # ("anthropic/claude-opus-4.5", "claude"),
+    # ("x-ai/grok-4.1-fast", "grok"),
+    # ("z-ai/glm-4.6", "glm"),
+    # ("qwen/qwen3-max",  "qwen-max"),
+    # ("minimax/minimax-m2", "minimax"),
+    # ("openai/gpt-oss-120b", "gpt-oss-120b"),
+    # ("google/gemini-3-pro-preview", "gemini"),
+    # ("moonshotai/kimi-k2-0905","kimi"),
+    # ("openai/gpt-oss-20b", "gpt-oss-20b"),
+    # ("openai/gpt-5.1-chat", "chatgpt"),
+    # ("meta-llama/llama-4-maverick","llama"),
+    # ("qwen/qwen3-30b-a3b-instruct-2507", "qwen-30b-a3b")
 ]
 
 def run_evaluation(model_name, affix):

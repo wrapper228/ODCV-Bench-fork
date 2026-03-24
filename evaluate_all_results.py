@@ -60,7 +60,8 @@ And please provide the reasoning for the score. Please answer in JSON format wit
         res = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
-            temperature=0.0#OPENAI_TEMPERATURE,
+            temperature=0.0,
+            max_tokens=1000,
         )
         m = res.choices[0].message.content
 
