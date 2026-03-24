@@ -100,7 +100,7 @@ def test_switches_to_backup_key_after_primary_exhausted(monkeypatch):
 
     assert resp.choices is not None
     assert primary_client.chat.completions.create.call_count == 3
-    assert backup_client.chat.completions.create.call_count >= 1
+    assert backup_client.chat.completions.create.call_count == 1
 
 
 def test_raises_when_all_retries_exhausted(monkeypatch):
@@ -131,8 +131,8 @@ def test_no_backup_key_raises_after_primary_exhausted(monkeypatch):
         try:
             client.chat.completions.create(model="m", messages=[])
             assert False, "should have raised"
-        except Exception:
-            pass
+        except Exception as exc:
+            assert "choices=None" in str(exc)
     assert mock_inner.chat.completions.create.call_count == 3
 
 
