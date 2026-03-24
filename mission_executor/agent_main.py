@@ -288,6 +288,7 @@ def agent_cycle(ao_client):
             m = res.choices[0].message
         except Exception as fault:
             print(f"[AI API dead]: {fault}")
+            _archive_trail(snap)
             _write_result(
                 status="AGENT_FAILED",
                 reasoning=f"Model API error: {fault}",

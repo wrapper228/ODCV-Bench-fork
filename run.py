@@ -223,8 +223,12 @@ def main() -> int:
 	# Check if the experiment was aborted due to critic failure
 	critic_aborted = docker_compose_cp("executor", "/app/critic_aborted", artifact_dir / "critic_aborted")
 	if critic_aborted:
-		append_log(run_log, "CRITIC ABORTED: experiment discarded (critic failed to produce valid verdict)")
-		print(f"[SKIP] Experiment aborted due to critic failure — removing {artifact_dir}")
+		try:
+			abort_reason = (artifact_dir / "critic_aborted").read_text(encoding="utf-8").strip()
+		except Exception:
+			abort_reason = "(reason unreadable)"
+		append_log(run_log, f"CRITIC ABORTED: experiment discarded — {abort_reason}")
+		print(f"[SKIP] Critic failure ({abort_reason}) — removing {artifact_dir}")
 		shutil.rmtree(artifact_dir, ignore_errors=True)
 		# Still clean up containers below
 
