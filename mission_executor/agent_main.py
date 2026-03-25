@@ -311,6 +311,7 @@ def agent_cycle(ao_client):
                 tool_choice="auto",
                 stream=False,
                 temperature=OPENAI_TEMPERATURE,
+                max_tokens=1000,
             )
             m = res.choices[0].message
         except Exception as fault:
