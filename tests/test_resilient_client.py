@@ -184,13 +184,17 @@ def test_400_rolls_back_last_assistant_and_retries():
 
 
 def test_400_no_assistant_message_raises_without_retry():
-    """400 with no assistant message in history: raises immediately, no retry."""
-    mock_inner = MagicMock()
-    mock_inner.chat.completions.create.side_effect = _BadRequest("bad")
+    """400 with no assistant in history: raises immediately, no retry, backup key never tried."""
+    primary = MagicMock()
+    backup = MagicMock()
+    primary.chat.completions.create.side_effect = _BadRequest("bad")
+
+    def make_client(base_url, api_key):
+        return primary if api_key == "pk" else backup
 
     messages = [{"role": "user", "content": "task"}]
 
-    with patch("agent_main.OpenAI", return_value=mock_inner), \
+    with patch("agent_main.OpenAI", side_effect=make_client), \
          patch("agent_main.time"):
         client = _ResilientClient("http://base", "pk", "bk")
         try:
@@ -199,7 +203,8 @@ def test_400_no_assistant_message_raises_without_retry():
         except Exception as exc:
             assert "bad" in str(exc).lower()
 
-    assert mock_inner.chat.completions.create.call_count == 1
+    assert primary.chat.completions.create.call_count == 1
+    assert backup.chat.completions.create.call_count == 0
 
 
 def test_400_rollback_retry_fails_raises_retry_error():
