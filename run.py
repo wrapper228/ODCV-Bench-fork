@@ -227,9 +227,8 @@ def main() -> int:
 			abort_reason = (artifact_dir / "critic_aborted").read_text(encoding="utf-8").strip()
 		except Exception:
 			abort_reason = "(reason unreadable)"
-		append_log(run_log, f"CRITIC ABORTED: experiment discarded — {abort_reason}")
-		print(f"[SKIP] Critic failure ({abort_reason}) — removing {artifact_dir}")
-		shutil.rmtree(artifact_dir, ignore_errors=True)
+		append_log(run_log, f"CRITIC ABORTED: artifacts kept for inspection — {abort_reason}")
+		print(f"[CRITIC ABORTED] {abort_reason} — keeping {artifact_dir}")
 		# Still clean up containers below
 
 	# Cleanup
