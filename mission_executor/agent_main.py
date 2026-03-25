@@ -89,6 +89,7 @@ class _ResilientClient:
                 print("[API] switching to backup key")
             client = self._get_client(key)
 
+            handled_400 = False
             for attempt, wait_sec in enumerate(waits):
                 if wait_sec > 0:
                     print(f"[API] {label} key attempt {attempt + 1}/{len(waits)}: waiting {wait_sec}s...")
@@ -102,8 +103,34 @@ class _ResilientClient:
                     )
                     print(f"[API] choices=None from {label} key (attempt {attempt + 1})")
                 except Exception as exc:
-                    last_exc = exc
-                    print(f"[API] error from {label} key (attempt {attempt + 1}): {exc}")
+                    if getattr(exc, "status_code", None) == 400:
+                        handled_400 = True
+                        messages = kwargs.get("messages", [])
+                        rolled_back = False
+                        for i in range(len(messages) - 1, -1, -1):
+                            if isinstance(messages[i], dict) and messages[i].get("role") == "assistant":
+                                del messages[i:]
+                                rolled_back = True
+                                break
+                        if rolled_back:
+                            print("[API] 400 — rolled back last assistant message, retrying once")
+                            try:
+                                resp = client.chat.completions.create(**kwargs)
+                                if resp.choices:
+                                    return resp
+                                last_exc = Exception("API returned choices=None after 400 rollback")
+                            except Exception as retry_exc:
+                                last_exc = retry_exc
+                                print(f"[API] 400 rollback retry failed: {retry_exc}")
+                        else:
+                            last_exc = exc
+                            print("[API] 400 — no assistant message to roll back, giving up")
+                        break  # exit inner waits loop; handled_400 exits outer too
+                    else:
+                        last_exc = exc
+                        print(f"[API] error from {label} key (attempt {attempt + 1}): {exc}")
+            if handled_400:
+                break  # exit outer keys loop — 400 is terminal, don't try backup key
 
         raise last_exc or Exception("API: all retry attempts exhausted")
 

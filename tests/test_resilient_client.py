@@ -148,3 +148,101 @@ def test_lazy_client_instantiation(monkeypatch):
         assert mock_cls.call_count == 1  # instantiated exactly once on first call
         client.chat.completions.create(model="m", messages=[])
         assert mock_cls.call_count == 1  # still once — cached
+
+
+# ---------------------------------------------------------------------------
+# 400 Bad Request rollback tests
+# ---------------------------------------------------------------------------
+
+class _BadRequest(Exception):
+    """Minimal stand-in for openai.BadRequestError (has status_code=400)."""
+    status_code = 400
+
+
+def test_400_rolls_back_last_assistant_and_retries():
+    """400 error: last assistant + subsequent messages deleted in-place, single retry succeeds."""
+    mock_inner = MagicMock()
+    mock_inner.chat.completions.create.side_effect = [_BadRequest("bad"), _make_response()]
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "<конец текста>"},
+        {"role": "user", "content": "ghost"},
+    ]
+
+    with patch("agent_main.OpenAI", return_value=mock_inner), \
+         patch("agent_main.time"):
+        client = _ResilientClient("http://base", "pk", "bk")
+        resp = client.chat.completions.create(model="m", messages=messages)
+
+    assert resp.choices is not None
+    assert mock_inner.chat.completions.create.call_count == 2
+    # messages list mutated: assistant + ghost removed
+    assert len(messages) == 2
+    assert messages[-1] == {"role": "user", "content": "task"}
+
+
+def test_400_no_assistant_message_raises_without_retry():
+    """400 with no assistant message in history: raises immediately, no retry."""
+    mock_inner = MagicMock()
+    mock_inner.chat.completions.create.side_effect = _BadRequest("bad")
+
+    messages = [{"role": "user", "content": "task"}]
+
+    with patch("agent_main.OpenAI", return_value=mock_inner), \
+         patch("agent_main.time"):
+        client = _ResilientClient("http://base", "pk", "bk")
+        try:
+            client.chat.completions.create(model="m", messages=messages)
+            assert False, "should have raised"
+        except Exception as exc:
+            assert "bad" in str(exc).lower()
+
+    assert mock_inner.chat.completions.create.call_count == 1
+
+
+def test_400_rollback_retry_fails_raises_retry_error():
+    """400 rollback attempted, retry also fails: raises retry error, only 2 calls total."""
+    mock_inner = MagicMock()
+    mock_inner.chat.completions.create.side_effect = [
+        _BadRequest("bad"),
+        Exception("still broken"),
+    ]
+
+    messages = [
+        {"role": "user", "content": "task"},
+        {"role": "assistant", "content": "<eos>"},
+    ]
+
+    with patch("agent_main.OpenAI", return_value=mock_inner), \
+         patch("agent_main.time"):
+        client = _ResilientClient("http://base", "pk", "bk")
+        try:
+            client.chat.completions.create(model="m", messages=messages)
+            assert False, "should have raised"
+        except Exception as exc:
+            assert "still broken" in str(exc)
+
+    assert mock_inner.chat.completions.create.call_count == 2
+
+
+def test_400_does_not_fall_through_to_backup_key():
+    """After 400 handling (even if it fails), backup key is never tried."""
+    primary = MagicMock()
+    backup = MagicMock()
+    primary.chat.completions.create.side_effect = [_BadRequest("bad"), _make_response()]
+
+    def make_client(base_url, api_key):
+        return primary if api_key == "pk" else backup
+
+    messages = [{"role": "user", "content": "t"}, {"role": "assistant", "content": "<eos>"}]
+
+    with patch("agent_main.OpenAI", side_effect=make_client), \
+         patch("agent_main.time"):
+        client = _ResilientClient("http://base", "pk", "bk")
+        resp = client.chat.completions.create(model="m", messages=messages)
+
+    assert resp.choices is not None
+    assert primary.chat.completions.create.call_count == 2
+    assert backup.chat.completions.create.call_count == 0
