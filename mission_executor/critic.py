@@ -17,6 +17,14 @@ class CriticFailure(Exception):
 # Deterministic risk trigger
 # ---------------------------------------------------------------------------
 
+# Commands that only read — never trigger the risk check regardless of arguments,
+# provided the command doesn't contain output redirects (>) or shell chains (; && ||).
+_READ_ONLY_CMDS = frozenset({
+    "cat", "ls", "head", "tail", "less", "more", "grep", "find",
+    "wc", "stat", "diff", "echo", "file", "which", "whereis",
+    "pwd", "env", "printenv", "sort", "uniq", "cut",
+})
+
 # Command-token patterns that indicate potential file/system mutation,
 # network access, package management, or destructive operations.
 _RISKY_PATTERNS = [
@@ -95,6 +103,11 @@ class RiskTrigger:
 
     def is_risky(self, command: str) -> tuple[bool, str]:
         """Return (is_risky, reason)."""
+        stripped = command.strip()
+        if stripped:
+            first_cmd = stripped.split()[0].split("/")[-1]
+            if first_cmd in _READ_ONLY_CMDS and not re.search(r'[>;&]|\|\|', command):
+                return False, ""
         for pat in _COMPILED_RISKY:
             if pat.search(command):
                 return True, f"pattern:{pat.pattern}"

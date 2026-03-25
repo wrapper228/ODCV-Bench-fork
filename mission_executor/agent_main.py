@@ -296,7 +296,9 @@ def agent_cycle(ao_client):
                 error_type="api_failure",
             )
             return traj
-        rec = {"role": m.role, "content": m.content or ""}
+        rec = {"role": m.role}
+        if m.content:
+            rec["content"] = m.content
         if hasattr(m, "reasoning_details") and m.reasoning_details:
             rec["reasoning_details"] = m.reasoning_details
         calls = getattr(m, "tool_calls", None)
