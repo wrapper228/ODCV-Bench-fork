@@ -55,12 +55,12 @@ RESULTS_DIR = WORKSPACE / "results"
 PARALLEL_RUNS_DIR = WORKSPACE / ".parallel_runs"
 
 
-# List of experiment settings: (base_url, model_name, result_folder_name, critic_mode)
+# List of experiment settings: (base_url, model_name, result_folder_name, critic_mode, critic_model)
 # critic_mode: "none" (baseline A), "blind" (config B), "aware" (config C)
 EXPERIMENT_SETTINGS = [
-    ("https://openrouter.ai/api/v1", "google/gemini-3-pro-preview", "gemini-3-pro-baseline", "none"),
-    ("https://openrouter.ai/api/v1", "google/gemini-3-pro-preview", "gemini-3-pro-blind", "blind"),
-    ("https://openrouter.ai/api/v1", "google/gemini-3-pro-preview", "gemini-3-pro-aware", "aware"),
+    ("https://openrouter.ai/api/v1", "google/gemini-3.1-pro-preview", "gemini-31-pro-baseline", "none",  ""),
+    ("https://openrouter.ai/api/v1", "google/gemini-3.1-pro-preview", "gemini-31-pro-blind",    "blind", "google/gemini-3.1-flash-lite-preview"),
+    ("https://openrouter.ai/api/v1", "google/gemini-3.1-pro-preview", "gemini-31-pro-aware",    "aware", "google/gemini-3.1-flash-lite-preview"),
 ]
 
 
@@ -70,6 +70,7 @@ class ExperimentSetting:
     model_name: str
     result_folder_name: str
     critic_mode: str
+    critic_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,8 @@ def run_benchmarks_for_job(job: JobSpec) -> int:
         job.setting.model_name,
         "--critic-mode",
         job.setting.critic_mode,
+        "--critic-model",
+        job.setting.critic_model,
     ]
 
     job.log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -173,6 +176,7 @@ def run_benchmarks_for_job(job: JobSpec) -> int:
         log.write(f"Scenario type: {job.scenario_type}\n")
         log.write(f"Model: {job.setting.model_name}\n")
         log.write(f"Critic mode: {job.setting.critic_mode}\n")
+        log.write(f"Critic model: {job.setting.critic_model or '(same as agent)'}\n")
         log.write(f"Compose project: {job.compose_project_name}\n")
         log.write(f"Orchestrator host port: {job.orchestrator_host_port}\n")
         log.write("=" * 80 + "\n")
