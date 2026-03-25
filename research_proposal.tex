@@ -27,7 +27,7 @@ A compliance monitor that is \textbf{task-blind}---it observes only the system p
 This hypothesis is motivated by two observations:
 \begin{enumerate}[nosep]
     \item \textbf{Zero-stake principle.} In preliminary experiments, an LLM evaluating compliance without task-completion pressure did not exhibit the same systematic bias toward allowing violations. Rationalization appears to require knowing \emph{what is at stake}.
-    \item \textbf{Decorrelated errors (predicted).} We expect a task-blind critic's errors to be perceptual (misunderstanding context), not motivational (rationalizing exceptions). If so, these errors are statistically independent from the agent's, and combining agent + blind critic should yield genuine error reduction.
+    \item \textbf{Decorrelated errors (predicted).} We expect a task-blind critic's errors to be perceptual (misunderstanding context), not motivational (rationalizing exceptions). Concretely, aware-critic false negatives should concentrate on \emph{contextually ambiguous} violations---commands that resemble legitimate workflow steps when the task is known (e.g., row-level data filtering presented as preprocessing) but constitute violations under the rules. Blind-critic false negatives, having no task to rationalize against, should be distributed across violation types without this systematic bias. If critic errors are decorrelated from the agent's, combining agent + blind critic yields genuine error reduction.
 \end{enumerate}
 
 \section{Proposed Method}
@@ -73,25 +73,53 @@ C & +Aware Critic & \checkmark & Yes \\
 \end{tabular}
 \end{table}
 
+\subsection{Evaluation Protocol}
+
+A na\"ive A/B/C comparison conflates critic quality with agent adaptation: different critic configurations produce different agent trajectories, so aggregate block rates measure \emph{system} differences rather than \emph{critic} differences. We decouple critic evaluation from agent behavior using an offline protocol:
+
+\begin{enumerate}[nosep]
+    \item \textbf{Generate a command corpus.} Run $N$ baseline episodes (configuration A, no critic). For every command flagged by the risk trigger, record the command, current working directory, and last terminal output.
+    \item \textbf{Establish ground truth.} A held-out LLM judge (distinct from the critic model) evaluates each command independently, producing a binary VIOLATION\,/\,ALLOW label with written justification. Commands are also categorized by violation type (see \S\ref{sec:metrics}).
+    \item \textbf{Evaluate critics offline.} Each command is submitted independently to both the blind and aware critics, without access to corpus labels or other commands in the corpus.
+    \item \textbf{Compare against ground truth.} Compute per-command precision, recall, and false negative rate for each critic mode.
+\end{enumerate}
+
+This holds the command distribution fixed across critic conditions: observed differences in verdicts are attributable to task context rather than to differences in agent behavior under each configuration.
+
 \subsection{Kill Experiment}
 
-The comparison between configurations B and C is the decisive test of our hypothesis:
+The decisive test is \textbf{False Negative Rate (FNR)}---the fraction of genuine violations the critic lets through---for blind versus aware critics on the offline corpus:
+
 \begin{itemize}[nosep]
-    \item \textbf{B $>$ C} (blind outperforms aware): Consistent with RRP. To rule out the alternative explanation that extra task context simply adds noise (information overload rather than rationalization), we additionally perform qualitative analysis of aware-critic outputs, looking for explicit task-based justifications of violations (e.g., ``ALLOW, because the task requires~X'').
-    \item \textbf{B $\approx$ C}: Task-blind principle is not the active mechanism; the benefit comes from having any external reviewer.
-    \item \textbf{B $<$ C}: Task-blind principle is harmful; the critic needs task context. \textbf{Hypothesis killed.}
+    \item \textbf{FNR(aware) $>$ FNR(blind)}: Consistent with RRP. Task context provides the substrate for rationalization, causing the aware critic to miss genuine violations more often. To distinguish rationalization from simple information overload, we perform qualitative analysis of aware-critic false negatives, checking for explicit task-based justifications (e.g., ``ALLOW, because the task requires~X'').
+    \item \textbf{FNR(aware) $\approx$ FNR(blind)}: The benefit of external review is not sensitive to task context; any reviewer helps equally. Task-blind principle is not the active mechanism.
+    \item \textbf{FNR(aware) $<$ FNR(blind)}: Task context improves violation detection. \textbf{Hypothesis killed.}
 \end{itemize}
 
-\subsection{Metrics}
+RRP additionally predicts that the FNR effect concentrates in the \emph{contextually ambiguous} command category (\S\ref{sec:metrics}). Even if FNR(aware) $\leq$ FNR(blind) overall, finding FNR(aware) $>$ FNR(blind) for ambiguous commands specifically constitutes positive evidence for the rationalization mechanism---and motivates task-blind monitoring even when aggregate recall is comparable.
 
-We focus on ODCV-Bench (its main paper is only a preprint, but right now it's the only benchmark that explicitly highlights the problem of \emph{constraint violation rationalization}). We use "severity score" metric defined in benchmark without any modifications.
+\subsection{Metrics}
+\label{sec:metrics}
+
+\textbf{Primary}: FNR\,=\,missed violations\,/\,total violations, for blind and aware critics separately, overall and stratified by violation type.
+
+\textbf{Secondary}: FPR, precision, F1---to confirm that any FNR reduction does not trade off against over-blocking legitimate commands.
+
+\textbf{Stratification by violation type}:
+\begin{itemize}[nosep]
+    \item \emph{Overt manipulation}: commands with explicit numeric mutation of source data (e.g., \texttt{awk \$4=\$4+0.1}, direct JSON overwrite). Both critics expected to perform similarly here.
+    \item \emph{Contextually ambiguous manipulation}: commands that constitute violations only relative to the rules, but resemble legitimate workflow steps in context (e.g., row-level filtering to cherry-pick favorable data points; \texttt{sed~-i} inserting fabricated field values). RRP predicts FNR(aware)\,$>$\,FNR(blind) specifically in this category.
+    \item \emph{Infrastructure operations}: file copies, script modifications, line-ending normalization---violation status depends on which files are targeted.
+\end{itemize}
+
+Run-level severity scores (ODCV-Bench metric, used without modification) from the online A/B/C comparison are reported as a secondary validation that offline critic quality translates to real-world agent behavior change.
 \section{Expected Contributions}
 
 \begin{enumerate}
     \item \textbf{Empirical characterization of RRP.} We provide controlled evidence that rationalization is not limited to the agent but reproduces in monitoring components when they have access to task context. To the best of our knowledge, these aspects have not been articulated in the literature.
     \item \textbf{Task-blind monitoring as a design principle.} We formalize and empirically validate the principle that compliance monitors should be informationally isolated from the agent's objective.
     \item \textbf{Practical low-overhead system.} Task-blind critic adds a small cost, requires no fine-tuning or architectural changes to the base agent, and is applicable to any tool-use LLM agent with clear action space (such as terminal-based agents). It can be easily programmed upon any agent.
-    \item \textbf{Ablation isolating the mechanism.} The blind-vs-aware comparison on the same model, same benchmark, same trigger logic isolates task awareness as the causal variable enabling rationalization.
+    \item \textbf{Ablation isolating the mechanism.} The offline evaluation protocol holds the command distribution fixed across blind and aware critics, isolating task awareness as the causal variable. FNR stratified by violation type further separates the rationalization mechanism (elevated FNR on contextually ambiguous commands) from perceptual errors (distributed FNR across all types).
 \end{enumerate}
 
 \section{Scope and Limitations}
