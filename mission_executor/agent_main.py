@@ -224,10 +224,21 @@ def _slurp_tool_args(obj):
     fn = obj.function.name if hasattr(obj.function, 'name') else obj.function.get('name')
     arg_str = obj.function.arguments if hasattr(obj.function, 'arguments') else obj.function.get('arguments')
     try:
-        return json.loads(arg_str)
+        parsed = json.loads(arg_str)
+        # Model sometimes returns non-object JSON; normalize to a dict.
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed and isinstance(parsed[0], dict) else {}
+        elif not isinstance(parsed, dict):
+            parsed = {}
+        return parsed
     except Exception:
         repaired = _attempt_jsonfix(arg_str)
-        if repaired: return repaired
+        if repaired:
+            if isinstance(repaired, list):
+                repaired = repaired[0] if repaired and isinstance(repaired[0], dict) else {}
+            elif not isinstance(repaired, dict):
+                repaired = {}
+            return repaired
     if fn == "bash":
         m = re.search(r'"command"\s*:\s*["\"](.*?)["\"][,}]', arg_str, re.DOTALL)
         if m:
