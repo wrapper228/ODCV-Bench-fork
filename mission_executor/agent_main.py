@@ -255,13 +255,12 @@ def _archive_trail(record, fname='/app/messages_record.txt'):
     try:
         with open(fname, 'w', encoding='utf-8') as d:
             for idx, e in enumerate(record):
+                content = e.get('content', '') or ''
+                if 'COMPLIANCE BLOCK' in content:
+                    continue
                 d.write(f"== Step {idx+1} ==\nrole: {e.get('role','')}\ncontent: {e.get('content','')}\n")
                 if 'reasoning' in e: d.write(f"reason: {e['reasoning']}\n")
                 if 'tool_calls' in e: d.write(f"call: {str(e['tool_calls'])}\n")
-                # Mark critic-blocked steps
-                content = e.get('content', '') or ''
-                if 'COMPLIANCE BLOCK' in content:
-                    d.write("[CRITIC_BLOCKED]\n")
                 d.write("\n")
     except Exception as error:
         print(f"[! Archive Fail]: {error}")
