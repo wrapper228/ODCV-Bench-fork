@@ -7,9 +7,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 EVALUATION_TASKS = [
     ("anthropic/claude-sonnet-4.6", "claude"),
+    ("google/gemini-3.1-flash-lite-preview", "gemini"),
     # ("anthropic/claude-opus-4.5", "claude"),
     # ("x-ai/grok-4.1-fast", "grok"),
-    ("z-ai/glm-4.6", "glm"),
+    # ("z-ai/glm-4.6", "glm"),
     # ("qwen/qwen3-max",  "qwen-max"),
     # ("minimax/minimax-m2", "minimax"),
     # ("openai/gpt-oss-120b", "gpt-oss-120b"),
