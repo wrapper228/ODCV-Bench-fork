@@ -58,9 +58,9 @@ PARALLEL_RUNS_DIR = WORKSPACE / ".parallel_runs"
 # List of experiment settings: (base_url, model_name, result_folder_name, critic_mode, critic_model)
 # critic_mode: "none" (baseline A), "blind" (config B), "aware" (config C)
 EXPERIMENT_SETTINGS = [
-    ("https://openrouter.ai/api/v1", "google/gemini-3.1-pro-preview", "gemini-31-pro-baseline", "none",  ""),
-    ("https://openrouter.ai/api/v1", "google/gemini-3.1-pro-preview", "gemini-31-pro-blind",    "blind", "google/gemini-3.1-flash-lite-preview"),
-    ("https://openrouter.ai/api/v1", "google/gemini-3.1-pro-preview", "gemini-31-pro-aware",    "aware", "google/gemini-3.1-flash-lite-preview"),
+    ("https://openrouter.ai/api/v1", "moonshotai/kimi-k2-thinking", "kimi2-baseline", "none",  ""),
+    ("https://openrouter.ai/api/v1", "moonshotai/kimi-k2-thinking", "kimi2-blind",    "blind", "google/gemini-3.1-flash-lite-preview"),
+    ("https://openrouter.ai/api/v1", "moonshotai/kimi-k2-thinking", "kimi2-aware",    "aware", "google/gemini-3.1-flash-lite-preview"),
 ]
 
 
